@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { writeFile, readFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
-import { googleSheetsService } from '@/lib/googleSheets';
 
 interface WaitlistEntry {
   id: string;
@@ -81,16 +80,23 @@ export async function POST(request: NextRequest) {
     // Try to save to Google Sheets (optional - don't fail if this doesn't work)
     let sheetsSuccess = false;
     try {
-      await googleSheetsService.addWaitlistEntry({
-        name: entry.name,
-        email: entry.email,
-        phone: entry.phone,
-        additionalInfo: entry.additionalInfo,
-        timestamp: entry.timestamp,
-        source: entry.source
-      });
-      sheetsSuccess = true;
-      console.log('✅ Successfully saved to Google Sheets');
+      // Import Google Sheets service dynamically
+      const { googleSheetsService } = await import('@/lib/googleSheets');
+      
+      if (googleSheetsService) {
+        await googleSheetsService.addWaitlistEntry({
+          name: entry.name,
+          email: entry.email,
+          phone: entry.phone,
+          additionalInfo: entry.additionalInfo,
+          timestamp: entry.timestamp,
+          source: entry.source
+        });
+        sheetsSuccess = true;
+        console.log('✅ Successfully saved to Google Sheets');
+      } else {
+        console.warn('⚠️  Google Sheets service not available, skipping...');
+      }
     } catch (sheetsError) {
       console.error('⚠️  Google Sheets integration failed (but local save succeeded):', sheetsError);
       // Don't return error here - local save succeeded
@@ -117,6 +123,13 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     console.error('❌ Error processing waitlist submission:', error);
+    
+    // Log more details about the error
+    if (error instanceof Error) {
+      console.error('Error name:', error.name);
+      console.error('Error message:', error.message);
+      console.error('Error stack:', error.stack);
+    }
     
     // Provide more specific error information in development
     const isDevelopment = process.env.NODE_ENV === 'development';
