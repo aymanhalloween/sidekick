@@ -53,15 +53,22 @@ export default function WaitlistPage() {
         }),
       });
 
+      const result = await response.json();
+
       if (!response.ok) {
-        throw new Error('Failed to submit form');
+        // Log the specific error for debugging
+        console.error('API Error:', result);
+        throw new Error(result.error || `Server responded with status ${response.status}`);
       }
 
+      // Success!
+      console.log('Submission successful:', result);
       setIsSubmitted(true);
       reset();
     } catch (error) {
-      setSubmitError('Something went wrong. Please try again.');
       console.error('Form submission error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Something went wrong. Please try again.';
+      setSubmitError(errorMessage);
     } finally {
       setIsSubmitting(false);
     }

@@ -58,27 +58,28 @@ export async function POST(request: NextRequest) {
         const fileContent = await readFile(filePath, 'utf-8');
         existingData = JSON.parse(fileContent);
       }
-    } catch (error) {
+    } catch (_error) {
       console.log('Creating new waitlist file');
       existingData = [];
     }
 
-    // Check for duplicate email
-    const existingEntry = existingData.find(entry => entry.email === body.email);
-    if (existingEntry) {
+    // Add new entry regardless of existing emails
+    existingData.push(entry);
+
+    // Save to file (this is the critical part - if this fails, we should return an error)
+    try {
+      await writeFile(filePath, JSON.stringify(existingData, null, 2), 'utf-8');
+      console.log('✅ Successfully saved to local file');
+    } catch (fileError) {
+      console.error('❌ Failed to save to local file:', fileError);
       return NextResponse.json(
-        { error: 'Email already registered for waitlist' },
-        { status: 409 }
+        { error: 'Failed to save submission. Please try again.' },
+        { status: 500 }
       );
     }
 
-    // Add new entry
-    existingData.push(entry);
-
-    // Save to file
-    await writeFile(filePath, JSON.stringify(existingData, null, 2), 'utf-8');
-
-    // Also save to Google Sheets
+    // Try to save to Google Sheets (optional - don't fail if this doesn't work)
+    let sheetsSuccess = false;
     try {
       await googleSheetsService.addWaitlistEntry({
         name: entry.name,
@@ -88,17 +89,21 @@ export async function POST(request: NextRequest) {
         timestamp: entry.timestamp,
         source: entry.source
       });
-    } catch (error) {
-      console.error('Google Sheets integration failed, but local save succeeded:', error);
-      // Continue with success response even if Google Sheets fails
+      sheetsSuccess = true;
+      console.log('✅ Successfully saved to Google Sheets');
+    } catch (sheetsError) {
+      console.error('⚠️  Google Sheets integration failed (but local save succeeded):', sheetsError);
+      // Don't return error here - local save succeeded
     }
 
     // Log for development
-    console.log('New waitlist entry:', {
+    console.log('New waitlist entry created:', {
       id: entry.id,
       name: entry.name,
       email: entry.email,
-      timestamp: entry.timestamp
+      timestamp: entry.timestamp,
+      localSave: true,
+      sheetsSave: sheetsSuccess
     });
 
     return NextResponse.json(
@@ -111,16 +116,22 @@ export async function POST(request: NextRequest) {
     );
 
   } catch (error) {
-    console.error('Error processing waitlist submission:', error);
+    console.error('❌ Error processing waitlist submission:', error);
+    
+    // Provide more specific error information in development
+    const isDevelopment = process.env.NODE_ENV === 'development';
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { 
+        error: 'Internal server error',
+        ...(isDevelopment && { details: error instanceof Error ? error.message : 'Unknown error' })
+      },
       { status: 500 }
     );
   }
 }
 
 // Optional: GET endpoint to retrieve waitlist data (for admin use)
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const filePath = path.join(process.cwd(), 'data', 'waitlist.json');
     
