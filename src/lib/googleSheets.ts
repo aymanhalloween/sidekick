@@ -20,7 +20,48 @@ export class GoogleSheetsService {
 
   private initializeService() {
     try {
-      // Check if all required environment variables are present
+      // Check for single JSON credentials variable first (preferred method)
+      if (process.env.GOOGLE_CREDENTIALS_JSON) {
+        console.log('Using GOOGLE_CREDENTIALS_JSON for authentication');
+        
+        try {
+          const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+          
+          // Validate that we have the required fields
+          const requiredFields = ['project_id', 'private_key', 'client_email'];
+          const missingFields = requiredFields.filter(field => !credentials[field]);
+          
+          if (missingFields.length > 0) {
+            console.error(`Missing required fields in GOOGLE_CREDENTIALS_JSON: ${missingFields.join(', ')}`);
+            this.isConfigured = false;
+            return;
+          }
+
+          // Initialize Google Auth with parsed credentials
+          this.auth = new google.auth.GoogleAuth({
+            credentials: {
+              type: 'service_account',
+              project_id: credentials.project_id,
+              private_key_id: credentials.private_key_id,
+              private_key: credentials.private_key.replace(/\\n/g, '\n'),
+              client_email: credentials.client_email,
+              client_id: credentials.client_id,
+            },
+            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+          });
+
+          this.sheets = google.sheets({ version: 'v4', auth: this.auth });
+          this.isConfigured = true;
+          console.log('Google Sheets service initialized successfully with JSON credentials');
+          return;
+          
+        } catch (parseError) {
+          console.error('Failed to parse GOOGLE_CREDENTIALS_JSON:', parseError);
+          // Fall through to try individual variables
+        }
+      }
+
+      // Fallback: Check if all required environment variables are present (old method)
       const requiredVars = [
         'GOOGLE_PROJECT_ID',
         'GOOGLE_PRIVATE_KEY_ID', 
@@ -33,11 +74,14 @@ export class GoogleSheetsService {
       
       if (missingVars.length > 0) {
         console.warn(`Google Sheets integration disabled: Missing environment variables: ${missingVars.join(', ')}`);
+        console.warn('Consider using GOOGLE_CREDENTIALS_JSON for easier configuration');
         this.isConfigured = false;
         return;
       }
 
-      // Initialize Google Auth with service account
+      console.log('Using individual environment variables for authentication');
+
+      // Initialize Google Auth with individual environment variables
       this.auth = new google.auth.GoogleAuth({
         credentials: {
           type: 'service_account',
