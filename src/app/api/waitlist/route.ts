@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { writeFile, readFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
+import { googleSheetsService } from '../../../lib/googleSheets';
 
 interface WaitlistEntry {
   id: string;
@@ -14,19 +15,35 @@ interface WaitlistEntry {
 }
 
 export async function POST(request: NextRequest) {
+  console.log('📥 Received waitlist submission request');
+  
   try {
-    const body = await request.json();
+    // Parse request body
+    let body;
+    try {
+      body = await request.json();
+      console.log('✅ Successfully parsed request body');
+    } catch (parseError) {
+      console.error('❌ Failed to parse request body:', parseError);
+      return NextResponse.json(
+        { error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
     
     // Validate required fields
     const requiredFields = ['name', 'email'];
     for (const field of requiredFields) {
       if (!body[field]) {
+        console.error(`❌ Missing required field: ${field}`);
         return NextResponse.json(
           { error: `Missing required field: ${field}` },
           { status: 400 }
         );
       }
     }
+
+    console.log('✅ Validation passed');
 
     // Create unique ID
     const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
@@ -42,13 +59,27 @@ export async function POST(request: NextRequest) {
       source: body.source || 'unknown'
     };
 
+    console.log('✅ Created waitlist entry object');
+
     // Ensure data directory exists
     const dataDir = path.join(process.cwd(), 'data');
-    if (!existsSync(dataDir)) {
-      await mkdir(dataDir, { recursive: true });
+    console.log('📁 Data directory path:', dataDir);
+    
+    try {
+      if (!existsSync(dataDir)) {
+        await mkdir(dataDir, { recursive: true });
+        console.log('✅ Created data directory');
+      }
+    } catch (dirError) {
+      console.error('❌ Failed to create data directory:', dirError);
+      return NextResponse.json(
+        { error: 'Failed to create data directory' },
+        { status: 500 }
+      );
     }
 
     const filePath = path.join(dataDir, 'waitlist.json');
+    console.log('📄 File path:', filePath);
     
     // Read existing data or create empty array
     let existingData: WaitlistEntry[] = [];
@@ -56,14 +87,28 @@ export async function POST(request: NextRequest) {
       if (existsSync(filePath)) {
         const fileContent = await readFile(filePath, 'utf-8');
         existingData = JSON.parse(fileContent);
+        console.log('✅ Successfully read existing data, entries:', existingData.length);
+      } else {
+        console.log('📝 No existing file, starting with empty array');
       }
-    } catch (_error) {
-      console.log('Creating new waitlist file');
+    } catch (readError) {
+      console.error('⚠️ Error reading existing file (starting fresh):', readError);
       existingData = [];
     }
 
-    // Add new entry regardless of existing emails
+    // Check for duplicate email
+    const existingEntry = existingData.find(entry => entry.email === body.email);
+    if (existingEntry) {
+      console.log('⚠️ Duplicate email found:', body.email);
+      return NextResponse.json(
+        { error: 'Email already registered for waitlist' },
+        { status: 409 }
+      );
+    }
+
+    // Add new entry
     existingData.push(entry);
+    console.log('✅ Added new entry to array');
 
     // Save to file (this is the critical part - if this fails, we should return an error)
     try {
@@ -80,23 +125,16 @@ export async function POST(request: NextRequest) {
     // Try to save to Google Sheets (optional - don't fail if this doesn't work)
     let sheetsSuccess = false;
     try {
-      // Import Google Sheets service dynamically
-      const { googleSheetsService } = await import('@/lib/googleSheets');
-      
-      if (googleSheetsService) {
-        await googleSheetsService.addWaitlistEntry({
-          name: entry.name,
-          email: entry.email,
-          phone: entry.phone,
-          additionalInfo: entry.additionalInfo,
-          timestamp: entry.timestamp,
-          source: entry.source
-        });
-        sheetsSuccess = true;
-        console.log('✅ Successfully saved to Google Sheets');
-      } else {
-        console.warn('⚠️  Google Sheets service not available, skipping...');
-      }
+      await googleSheetsService.addWaitlistEntry({
+        name: entry.name,
+        email: entry.email,
+        phone: entry.phone,
+        additionalInfo: entry.additionalInfo,
+        timestamp: entry.timestamp,
+        source: entry.source
+      });
+      sheetsSuccess = true;
+      console.log('✅ Successfully saved to Google Sheets');
     } catch (sheetsError) {
       console.error('⚠️  Google Sheets integration failed (but local save succeeded):', sheetsError);
       // Don't return error here - local save succeeded
@@ -122,58 +160,19 @@ export async function POST(request: NextRequest) {
     );
 
   } catch (error) {
-    console.error('❌ Error processing waitlist submission:', error);
-    
-    // Log more details about the error
-    if (error instanceof Error) {
-      console.error('Error name:', error.name);
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
-    }
+    console.error('❌ Unexpected error processing waitlist submission:', error);
+    console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
     
     // Provide more specific error information in development
     const isDevelopment = process.env.NODE_ENV === 'development';
     return NextResponse.json(
       { 
         error: 'Internal server error',
-        ...(isDevelopment && { details: error instanceof Error ? error.message : 'Unknown error' })
+        ...(isDevelopment && { 
+          details: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined
+        })
       },
-      { status: 500 }
-    );
-  }
-}
-
-// Optional: GET endpoint to retrieve waitlist data (for admin use)
-export async function GET(_request: NextRequest) {
-  try {
-    const filePath = path.join(process.cwd(), 'data', 'waitlist.json');
-    
-    if (!existsSync(filePath)) {
-      return NextResponse.json({ entries: [], count: 0 });
-    }
-
-    const fileContent = await readFile(filePath, 'utf-8');
-    const data: WaitlistEntry[] = JSON.parse(fileContent);
-
-    // Return summary data (without sensitive info for security)
-    const summary = data.map(entry => ({
-      id: entry.id,
-      name: entry.name,
-      email: entry.email,
-      timestamp: entry.timestamp,
-      source: entry.source
-    }));
-
-    return NextResponse.json({
-      entries: summary,
-      count: data.length,
-      latest: data[data.length - 1]?.timestamp
-    });
-
-  } catch (error) {
-    console.error('Error retrieving waitlist data:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
       { status: 500 }
     );
   }

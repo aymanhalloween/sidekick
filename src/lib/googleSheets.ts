@@ -10,28 +10,62 @@ interface WaitlistEntry {
 }
 
 export class GoogleSheetsService {
-  private sheets;
-  private auth;
+  private sheets: any = null;
+  private auth: any = null;
+  private isConfigured: boolean = false;
 
   constructor() {
-    // Initialize Google Auth with service account
-    this.auth = new google.auth.GoogleAuth({
-      credentials: {
-        type: 'service_account',
-        project_id: process.env.GOOGLE_PROJECT_ID,
-        private_key_id: process.env.GOOGLE_PRIVATE_KEY_ID,
-        private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        client_id: process.env.GOOGLE_CLIENT_ID,
-      },
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
+    this.initializeService();
+  }
 
-    this.sheets = google.sheets({ version: 'v4', auth: this.auth });
+  private initializeService() {
+    try {
+      // Check if all required environment variables are present
+      const requiredVars = [
+        'GOOGLE_PROJECT_ID',
+        'GOOGLE_PRIVATE_KEY_ID', 
+        'GOOGLE_PRIVATE_KEY',
+        'GOOGLE_CLIENT_EMAIL',
+        'GOOGLE_CLIENT_ID'
+      ];
+
+      const missingVars = requiredVars.filter(varName => !process.env[varName]);
+      
+      if (missingVars.length > 0) {
+        console.warn(`Google Sheets integration disabled: Missing environment variables: ${missingVars.join(', ')}`);
+        this.isConfigured = false;
+        return;
+      }
+
+      // Initialize Google Auth with service account
+      this.auth = new google.auth.GoogleAuth({
+        credentials: {
+          type: 'service_account',
+          project_id: process.env.GOOGLE_PROJECT_ID,
+          private_key_id: process.env.GOOGLE_PRIVATE_KEY_ID,
+          private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+          client_email: process.env.GOOGLE_CLIENT_EMAIL,
+          client_id: process.env.GOOGLE_CLIENT_ID,
+        },
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      });
+
+      this.sheets = google.sheets({ version: 'v4', auth: this.auth });
+      this.isConfigured = true;
+      console.log('Google Sheets service initialized successfully');
+    } catch (error) {
+      console.error('Failed to initialize Google Sheets service:', error);
+      this.isConfigured = false;
+    }
   }
 
   async addWaitlistEntry(entry: WaitlistEntry): Promise<boolean> {
     try {
+      if (!this.isConfigured) {
+        console.warn('Google Sheets integration is not configured');
+        return false;
+      }
+
       if (!process.env.GOOGLE_SHEET_ID) {
         console.warn('Google Sheet ID not configured, skipping Google Sheets integration');
         return false;
@@ -67,6 +101,11 @@ export class GoogleSheetsService {
 
   async initializeSheet(): Promise<boolean> {
     try {
+      if (!this.isConfigured) {
+        console.warn('Google Sheets integration is not configured');
+        return false;
+      }
+
       if (!process.env.GOOGLE_SHEET_ID) {
         console.warn('Google Sheet ID not configured');
         return false;
